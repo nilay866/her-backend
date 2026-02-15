@@ -505,8 +505,21 @@ def create_health_log(body: HealthLogCreate, db: Session = Depends(get_db)):
             "bleeding_level": log.bleeding_level, "mood": log.mood, "notes": log.notes, "log_date": str(log.log_date)}
 
 @app.get("/health-logs")
-def get_health_logs(user_id: str, db: Session = Depends(get_db)):
-    logs = db.query(HealthLog).filter(HealthLog.user_id == uuid.UUID(user_id)).order_by(HealthLog.log_date.desc()).all()
+def get_health_logs(user_id: str, authorization: str = Header(...), db: Session = Depends(get_db)):
+    payload = verify_token(authorization)
+    requesting_user_id = uuid.UUID(payload["sub"])
+    target_user_id = uuid.UUID(user_id)
+
+    # Security check: User can access own logs OR linked doctor can access patient logs
+    if requesting_user_id != target_user_id:
+        link = db.query(DoctorPatientLink).filter(
+            DoctorPatientLink.doctor_id == requesting_user_id,
+            DoctorPatientLink.patient_id == target_user_id
+        ).first()
+        if not link:
+            raise HTTPException(status_code=403, detail="Not authorized to view these logs")
+
+    logs = db.query(HealthLog).filter(HealthLog.user_id == target_user_id).order_by(HealthLog.log_date.desc()).all()
     return [{"id": str(l.id), "user_id": str(l.user_id), "log_type": l.log_type, "pain_level": l.pain_level,
              "bleeding_level": l.bleeding_level, "mood": l.mood, "notes": l.notes, "log_date": str(l.log_date)} for l in logs]
 
@@ -529,6 +542,43 @@ def delete_health_log(log_id: str, db: Session = Depends(get_db)):
     if not log: raise HTTPException(status_code=404, detail="Log not found")
     db.delete(log); db.commit()
     return {"message": "Health log deleted"}
+
+# ════════════════════════════════════
+#      DOCTOR REGISTER PATIENT
+# ════════════════════════════════════
+
+class RegisterPatientRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    age: int = 25
+
+@app.post("/doctor/register-patient")
+def register_patient_for_doctor(body: RegisterPatientRequest, authorization: str = Header(...), db: Session = Depends(get_db)):
+    payload = verify_token(authorization)
+    doctor_id = uuid.UUID(payload["sub"])
+    
+    # Verify doctor role
+    doctor = db.query(User).filter(User.id == doctor_id).first()
+    if not doctor or doctor.role != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can perform this action")
+
+    # Check existing
+    if db.query(User).filter(User.email == body.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Create Patient
+    patient = User(id=uuid.uuid4(), name=body.name, email=body.email, 
+                   password_hash=hash_password(body.password), age=body.age, role="patient")
+    db.add(patient)
+    db.commit()
+
+    # Link to Doctor
+    link = DoctorPatientLink(id=uuid.uuid4(), doctor_id=doctor_id, patient_id=patient.id)
+    db.add(link)
+    db.commit()
+
+    return {"message": "Patient registered and linked", "patient_id": str(patient.id), "name": patient.name}
 
 # ════════════════════════════════════
 #             CHAT
