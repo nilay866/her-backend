@@ -17,7 +17,19 @@ load_dotenv()
 app = FastAPI(title="HerCare API")
 
 # ────── CORS ──────
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:3000",
+        "http://ec2-52-66-232-144.ap-south-1.compute.amazonaws.com",
+        "https://nilay866.github.io",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ────── JWT Security ──────
