@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy.orm import Session
 from database import get_db
 from models import User, HealthLog
@@ -16,6 +17,7 @@ app = FastAPI(title="HerCare API")
 
 # ────── CORS ──────
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ────── JWT Security ──────
 SECRET_KEY = os.getenv("SECRET_KEY", "hercare-fallback-secret")

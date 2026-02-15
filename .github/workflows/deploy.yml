@@ -35,7 +35,7 @@ jobs:
               --restart always \
               -e DATABASE_URL='${{ secrets.DATABASE_URL }}' \
               -e SECRET_KEY='${{ secrets.SECRET_KEY }}' \
-              -e WORKERS=4 \
+              -e WORKERS=2 \
               hercare-backend
             
             # Prune unused images to save space

@@ -23,11 +23,11 @@ class HealthLog(Base):
     __tablename__ = "health_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     log_type = Column(String, nullable=False)
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    log_date = Column(Date, nullable=False, default=date.today)
+    log_date = Column(Date, nullable=False, default=date.today, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     pain_level = Column(Integer, nullable=True)
     bleeding_level = Column(String, nullable=True)
