@@ -25,6 +25,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://ec2-52-66-232-144.ap-south-1.compute.amazonaws.com",
         "https://nilay866.github.io",
+        "http://localhost:8082",
     ],
     allow_credentials=True,
     allow_methods=["*"],
