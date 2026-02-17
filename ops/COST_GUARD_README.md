@@ -6,6 +6,7 @@ If cost is greater than threshold, it:
 - stops configured EC2 instances
 - stops configured RDS instances
 - disables configured CloudFront distributions
+- disables its EventBridge schedule and freezes its own Lambda concurrency
 
 ## Files
 
@@ -23,8 +24,9 @@ chmod +x ops/deploy_cost_guard.sh
 
 ## Notes
 
-- Trigger schedule: every 6 hours.
+- Trigger schedule: every 1 hour.
 - Threshold: `NET_COST_THRESHOLD_USD=0.01`.
 - Cost Explorer data can lag by several hours.
+- Exact zero overage is not guaranteed because AWS billing metrics are delayed.
 - Stopped RDS can auto-start after ~7 days by AWS behavior. For strict zero bill, delete DB resources manually when needed.
 - S3 storage may still incur tiny charges if objects remain.

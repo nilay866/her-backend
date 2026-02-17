@@ -21,7 +21,7 @@ fi
 
 ROLE_NAME="hercare-cost-guard-lambda-role"
 LAMBDA_NAME="hercare-cost-guard"
-RULE_NAME="hercare-cost-guard-every-6h"
+RULE_NAME="hercare-cost-guard-every-1h"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 
 WORKDIR="$(mktemp -d)"
@@ -83,6 +83,24 @@ cat > "${WORKDIR}/inline-policy.json" <<'JSON'
         "cloudfront:UpdateDistribution"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "EventBridgeSelfDisable",
+      "Effect": "Allow",
+      "Action": [
+        "events:DisableRule",
+        "events:ListTargetsByRule",
+        "events:RemoveTargets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LambdaSelfDisable",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:PutFunctionConcurrency"
+      ],
+      "Resource": "*"
     }
   ]
 }
@@ -103,6 +121,9 @@ if aws lambda get-function --function-name "${LAMBDA_NAME}" --region "${REGION}"
     --function-name "${LAMBDA_NAME}" \
     --zip-file "fileb://${WORKDIR}/function.zip" \
     --region "${REGION}" >/dev/null
+  aws lambda wait function-updated \
+    --function-name "${LAMBDA_NAME}" \
+    --region "${REGION}"
 else
   aws lambda create-function \
     --function-name "${LAMBDA_NAME}" \
@@ -113,6 +134,9 @@ else
     --timeout 60 \
     --memory-size 256 \
     --region "${REGION}" >/dev/null
+  aws lambda wait function-active-v2 \
+    --function-name "${LAMBDA_NAME}" \
+    --region "${REGION}"
 fi
 
 aws lambda update-function-configuration \
@@ -120,15 +144,21 @@ aws lambda update-function-configuration \
   --environment "$(jq -nc \
     --arg threshold "0.01" \
     --arg dryrun "false" \
+    --arg selfDisable "true" \
+    --arg ruleName "${RULE_NAME}" \
+    --arg lambdaName "${LAMBDA_NAME}" \
     --arg ec2 "${EC2_ID}" \
     --arg rds "${RDS_ID}" \
     --arg cf "${CF_FRONTEND_ID},${CF_BACKEND_ID}" \
-    '{Variables:{NET_COST_THRESHOLD_USD:$threshold,DRY_RUN:$dryrun,EC2_INSTANCE_IDS:$ec2,RDS_INSTANCE_IDS:$rds,CLOUDFRONT_DISTRIBUTION_IDS:$cf}}')" \
+    '{Variables:{NET_COST_THRESHOLD_USD:$threshold,DRY_RUN:$dryrun,SELF_DISABLE_ON_TRIGGER:$selfDisable,SCHEDULER_RULE_NAME:$ruleName,LAMBDA_FUNCTION_NAME:$lambdaName,EC2_INSTANCE_IDS:$ec2,RDS_INSTANCE_IDS:$rds,CLOUDFRONT_DISTRIBUTION_IDS:$cf}}')" \
   --region "${REGION}" >/dev/null
+aws lambda wait function-updated \
+  --function-name "${LAMBDA_NAME}" \
+  --region "${REGION}"
 
 RULE_ARN="$(aws events put-rule \
   --name "${RULE_NAME}" \
-  --schedule-expression 'rate(6 hours)' \
+  --schedule-expression 'rate(1 hour)' \
   --state ENABLED \
   --region "${REGION}" \
   --query RuleArn --output text)"

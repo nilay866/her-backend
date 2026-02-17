@@ -9,6 +9,8 @@ ce = boto3.client("ce", region_name="us-east-1")
 ec2 = boto3.client("ec2")
 rds = boto3.client("rds")
 cloudfront = boto3.client("cloudfront")
+events = boto3.client("events")
+lambda_client = boto3.client("lambda")
 
 
 def _split_env(name: str) -> List[str]:
@@ -105,9 +107,54 @@ def _disable_cloudfront(distribution_ids: List[str], dry_run: bool) -> List[str]
     return changed
 
 
+def _disable_automation(rule_name: str, lambda_name: str, dry_run: bool) -> dict:
+    out = {
+        "disabled_rule": False,
+        "removed_targets": False,
+        "lambda_concurrency_zero": False,
+    }
+    if dry_run:
+        return out
+
+    # 1) Disable schedule rule
+    try:
+        events.disable_rule(Name=rule_name)
+        out["disabled_rule"] = True
+    except Exception:
+        pass
+
+    # 2) Remove all targets from the rule
+    try:
+        targets = events.list_targets_by_rule(Rule=rule_name).get("Targets", [])
+        if targets:
+            events.remove_targets(
+                Rule=rule_name,
+                Ids=[t["Id"] for t in targets],
+                Force=True,
+            )
+        out["removed_targets"] = True
+    except Exception:
+        pass
+
+    # 3) Freeze lambda execution
+    try:
+        lambda_client.put_function_concurrency(
+            FunctionName=lambda_name,
+            ReservedConcurrentExecutions=0,
+        )
+        out["lambda_concurrency_zero"] = True
+    except Exception:
+        pass
+
+    return out
+
+
 def handler(event, context):
     threshold = float(os.getenv("NET_COST_THRESHOLD_USD", "0.01"))
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    self_disable = os.getenv("SELF_DISABLE_ON_TRIGGER", "true").lower() == "true"
+    rule_name = os.getenv("SCHEDULER_RULE_NAME", "hercare-cost-guard-every-1h")
+    lambda_name = os.getenv("LAMBDA_FUNCTION_NAME", context.function_name)
 
     ec2_ids = _split_env("EC2_INSTANCE_IDS")
     rds_ids = _split_env("RDS_INSTANCE_IDS")
@@ -123,6 +170,7 @@ def handler(event, context):
         "stopped_ec2": [],
         "stopped_rds": [],
         "disabled_cloudfront": [],
+        "automation_shutdown": {},
     }
 
     if current_net <= threshold:
@@ -132,5 +180,10 @@ def handler(event, context):
     result["stopped_ec2"] = _stop_ec2(ec2_ids, dry_run=dry_run)
     result["stopped_rds"] = _stop_rds(rds_ids, dry_run=dry_run)
     result["disabled_cloudfront"] = _disable_cloudfront(cf_ids, dry_run=dry_run)
+    if self_disable:
+        result["automation_shutdown"] = _disable_automation(
+            rule_name=rule_name,
+            lambda_name=lambda_name,
+            dry_run=dry_run,
+        )
     return result
-
