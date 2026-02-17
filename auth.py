@@ -34,6 +34,7 @@ def create_token(data: dict, expires_delta: timedelta = None) -> str:
 def create_token_with_roles(user_id: str, user_name: str, roles: list = None) -> str:
     """Create JWT token with user roles embedded"""
     data = {
+        "sub": user_id,
         "user_id": user_id,
         "name": user_name,
         "roles": roles or []
@@ -99,12 +100,32 @@ def get_current_user_with_roles(token: str = Depends(oauth2_scheme), db: Session
         if role:
             roles.append(role.name)
             permissions.update(role.permissions)
+
+    # Backward compatibility for users that only have users.role set
+    # but no entry in user_roles yet.
+    if user.role and user.role not in roles:
+        roles.append(user.role)
     
     # Attach roles and permissions to user object
     user.roles = roles
     user.permissions = permissions
     
     return user
+
+def require_role_dep(*required_roles):
+    """FastAPI dependency-style role check."""
+    def dependency(current_user = Depends(get_current_user_with_roles)):
+        current_roles = set(getattr(current_user, "roles", []) or [])
+        if current_user and getattr(current_user, "role", None):
+            current_roles.add(current_user.role)
+
+        if not any(role in current_roles for role in required_roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required roles: {', '.join(required_roles)}"
+            )
+        return current_user
+    return dependency
 
 # ─── Helper: Check if user has role ───
 def has_role(user, required_role: str) -> bool:

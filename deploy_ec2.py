@@ -65,8 +65,10 @@ docker build -t hercare-backend .
 
 # Run Container
 # Using the RDS Endpoint and Password from previous steps
+# Run Container
+# Using Supabase Database
 docker run -d -p 80:8000 \\
-  -e DATABASE_URL='postgresql://postgres:XeSHMfBOkK0cM4js@hercare-db.cnwui00o4gn8.ap-south-1.rds.amazonaws.com:5432/postgres' \\
+  -e DATABASE_URL='postgresql://postgres.rbmlnrwjuocuhmnsrvrc:wohfuN-wekhuv-9xaksi@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres' \\
   -e SECRET_KEY='hercare-production-secret-key-change-me' \\
   -e WORKERS=4 \\
   --restart always \\

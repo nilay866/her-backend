@@ -2,7 +2,8 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy.orm import Session
-from database import get_db
+from sqlalchemy import text
+from database import get_db, engine
 from models import User, HealthLog, PregnancyProfile, DoctorProfile, DoctorPatientLink, MedicalReport, Medication, DietPlan, EmergencyRequest, Consultation, MedicalHistory, UserRole, Role, Appointment
 from auth import create_token_with_roles, verify_password, hash_password, get_client_ip, get_current_user
 from audit import AuditService
@@ -30,33 +31,117 @@ appointment_router = APIRouter(prefix="/api/v1/appointments", tags=["appointment
 # ────── Include Routers (Will be moved to bottom) ──────
 
 # ────── CORS ──────
+default_allowed_origins = [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8082",
+    "http://localhost:8083",
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://ec2-52-66-232-144.ap-south-1.compute.amazonaws.com",
+    "https://nilay866.github.io",
+    "http://hercare-app-frontend-u1al0f.s3-website.ap-south-1.amazonaws.com",
+    "http://hercare-app-frontend-cszaiz.s3-website.ap-south-1.amazonaws.com",
+    "http://hercare-app-frontend-47kn8h.s3-website.ap-south-1.amazonaws.com",
+    "http://hercare-app-frontend-5yajn4.s3-website.ap-south-1.amazonaws.com",
+]
+extra_allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://ec2-52-66-232-144.ap-south-1.compute.amazonaws.com",
-        "https://nilay866.github.io",
-        "http://localhost:8082",
-        "http://localhost:8083",
-        "http://hercare-app-frontend-u1al0f.s3-website.ap-south-1.amazonaws.com",
-        "http://hercare-app-frontend-cszaiz.s3-website.ap-south-1.amazonaws.com",
-        "http://hercare-app-frontend-47kn8h.s3-website.ap-south-1.amazonaws.com",
-        "http://hercare-app-frontend-5yajn4.s3-website.ap-south-1.amazonaws.com",
-        "https://nilay866.github.io",
-        "http://localhost",
-        "http://127.0.0.1",
-    ],
-    allow_origin_regex=r"http://localhost:.*",
+    allow_origins=list(dict.fromkeys(default_allowed_origins + extra_allowed_origins)),
+    allow_origin_regex=os.getenv("ALLOW_ORIGIN_REGEX", r"http://localhost:.*"),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.on_event("startup")
+def run_startup_migrations():
+    """
+    Keep production DB schema compatible with current code without requiring
+    manual migration steps for critical hotfixes.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE doctor_patient_links
+                ADD COLUMN IF NOT EXISTS share_code VARCHAR
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE consultations
+                ADD COLUMN IF NOT EXISTS treatment_plan TEXT
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE consultations
+                ADD COLUMN IF NOT EXISTS prescriptions JSON
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE consultations
+                ADD COLUMN IF NOT EXISTS billing_items JSON
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE consultations
+                ADD COLUMN IF NOT EXISTS total_amount DOUBLE PRECISION DEFAULT 0
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE consultations
+                ADD COLUMN IF NOT EXISTS payment_status VARCHAR DEFAULT 'pending'
+                """
+            )
+        )
+        # Expand allowed user roles for admin accounts.
+        conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check"))
+        conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD CONSTRAINT users_role_check
+                CHECK (
+                    role = ANY (
+                        ARRAY[
+                            'patient'::text,
+                            'doctor'::text,
+                            'admin'::text,
+                            'hospital_admin'::text,
+                            'super_admin'::text
+                        ]
+                    )
+                )
+                """
+            )
+        )
 
 # ────── JWT Security ──────
 SECRET_KEY = os.getenv("SECRET_KEY", "hercare-fallback-secret")
@@ -76,7 +161,13 @@ def verify_token(authorization: str) -> dict:
         raise HTTPException(status_code=401, detail="Missing or invalid token")
     try:
         from auth import SECRET_KEY as AUTH_SECRET_KEY
-        return jwt.decode(authorization[7:], AUTH_SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(authorization[7:], AUTH_SECRET_KEY, algorithms=[ALGORITHM])
+        # Keep both keys for backward compatibility across older/newer endpoints.
+        if "sub" not in payload and "user_id" in payload:
+            payload["sub"] = payload["user_id"]
+        if "user_id" not in payload and "sub" in payload:
+            payload["user_id"] = payload["sub"]
+        return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
@@ -209,6 +300,8 @@ def login(credentials: UserLogin, request: Request = None, db: Session = Depends
     # Get user roles
     user_roles = db.query(UserRole).filter(UserRole.user_id == user.id).all()
     roles = [db.query(Role).filter(Role.id == ur.role_id).first().name for ur in user_roles]
+    if user.role and user.role not in roles:
+        roles.append(user.role)
     
     # Audit successful login
     ip = get_client_ip(request) if request else None
@@ -404,7 +497,12 @@ def link_doctor(body: LinkDoctorRequest, authorization: str = Header(...), db: S
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Already linked")
-    link = DoctorPatientLink(id=uuid.uuid4(), doctor_id=doctor_profile.user_id, patient_id=uuid.UUID(body.patient_id))
+    link = DoctorPatientLink(
+        id=uuid.uuid4(),
+        doctor_id=doctor_profile.user_id,
+        patient_id=uuid.UUID(body.patient_id),
+        permissions=DEFAULT_LINK_PERMISSIONS.copy(),
+    )
     db.add(link); db.commit()
     doctor_user = db.query(User).filter(User.id == doctor_profile.user_id).first()
     return {"message": "Linked successfully", "doctor_name": doctor_user.name if doctor_user else "Doctor",
@@ -492,11 +590,85 @@ class ReportCreate(BaseModel):
     file_data: str | None = None
     file_name: str | None = None
 
+ADMIN_ROLE_NAMES = {"admin", "hospital_admin", "super_admin"}
+DEFAULT_LINK_PERMISSIONS = {
+    "health_logs": True,
+    "reports": True,
+    "medications": True,
+}
+
+def _parse_uuid_or_400(value: str, field_name: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+def _get_requester_with_roles(authorization: str, db: Session) -> tuple[User, set[str]]:
+    payload = verify_token(authorization)
+    try:
+        requester_id = uuid.UUID(str(payload.get("sub")))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    requester = db.query(User).filter(User.id == requester_id).first()
+    if not requester:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    roles = {str(r).lower() for r in (payload.get("roles") or []) if r}
+    if requester.role:
+        roles.add(requester.role.lower())
+    return requester, roles
+
+def _authorize_report_access(
+    requester: User,
+    requester_roles: set[str],
+    patient_id: uuid.UUID,
+    db: Session,
+    require_report_permission: bool,
+) -> None:
+    # Patient can access own reports.
+    if requester.id == patient_id:
+        return
+
+    # Admin roles can access all reports.
+    if requester_roles.intersection(ADMIN_ROLE_NAMES):
+        return
+
+    # Non-admin users must be linked doctor for this patient.
+    link = (
+        db.query(DoctorPatientLink)
+        .filter(
+            DoctorPatientLink.doctor_id == requester.id,
+            DoctorPatientLink.patient_id == patient_id,
+        )
+        .first()
+    )
+    if not link:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: doctor-patient link not found",
+        )
+
+    if require_report_permission and not (link.permissions or {}).get("reports", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: patient has not granted reports permission",
+        )
+
 @app.post("/reports")
 def create_report(body: ReportCreate, authorization: str = Header(...), db: Session = Depends(get_db)):
-    verify_token(authorization)
+    requester, requester_roles = _get_requester_with_roles(authorization, db)
+    patient_id = _parse_uuid_or_400(body.patient_id, "patient_id")
+    _authorize_report_access(
+        requester=requester,
+        requester_roles=requester_roles,
+        patient_id=patient_id,
+        db=db,
+        require_report_permission=True,
+    )
+
+    # Ignore client-provided uploaded_by to prevent spoofing.
     report = MedicalReport(
-        id=uuid.uuid4(), patient_id=uuid.UUID(body.patient_id), uploaded_by=uuid.UUID(body.uploaded_by),
+        id=uuid.uuid4(), patient_id=patient_id, uploaded_by=requester.id,
         title=body.title, report_type=body.report_type, notes=body.notes,
         file_data=body.file_data, file_name=body.file_name
     )
@@ -505,31 +677,67 @@ def create_report(body: ReportCreate, authorization: str = Header(...), db: Sess
             "notes": report.notes, "file_name": report.file_name, "created_at": str(report.created_at)}
 
 @app.get("/reports/{patient_id}")
-def get_reports(patient_id: str, authorization: str = Header(...), db: Session = Depends(get_db)):
-    payload = verify_token(authorization)
-    req_id = uuid.UUID(payload["sub"])
-    pat_id = uuid.UUID(patient_id)
-    
-    if req_id != pat_id:
-        link = db.query(DoctorPatientLink).filter(DoctorPatientLink.doctor_id == req_id, DoctorPatientLink.patient_id == pat_id).first()
-        if not link: raise HTTPException(status_code=403, detail="Not authorized")
-        if not (link.permissions or {}).get("reports", False): # Default False for reports? Using False as safe default
-             # Actually, for existing users, this might break if default is empty.
-             # But user said "she can share 100 doctors", implying opt-in.
-             # I'll stick to True for now for UX smoothness or user will be confused why it's empty.
-             # Let's use True.
-             if not (link.permissions or {}).get("reports", True):
-                 raise HTTPException(status_code=403, detail="Permission denied")
+def get_reports(
+    patient_id: str,
+    include_data: bool = False,
+    authorization: str = Header(...),
+    db: Session = Depends(get_db),
+):
+    requester, requester_roles = _get_requester_with_roles(authorization, db)
+    pat_id = _parse_uuid_or_400(patient_id, "patient_id")
+    _authorize_report_access(
+        requester=requester,
+        requester_roles=requester_roles,
+        patient_id=pat_id,
+        db=db,
+        require_report_permission=True,
+    )
 
-    reports = db.query(MedicalReport).filter(MedicalReport.patient_id == pat_id).order_by(MedicalReport.created_at.desc()).all()
-    return [{"id": str(r.id), "title": r.title, "report_type": r.report_type, "notes": r.notes,
-             "file_name": r.file_name, "uploaded_by": str(r.uploaded_by), "created_at": str(r.created_at)} for r in reports]
+    reports = (
+        db.query(MedicalReport)
+        .filter(MedicalReport.patient_id == pat_id)
+        .order_by(MedicalReport.created_at.desc())
+        .all()
+    )
+    response = []
+    for r in reports:
+        row = {
+            "id": str(r.id),
+            "title": r.title,
+            "report_type": r.report_type,
+            "notes": r.notes,
+            "file_name": r.file_name,
+            "uploaded_by": str(r.uploaded_by),
+            "created_at": str(r.created_at),
+        }
+        if include_data:
+            row["file_data"] = r.file_data
+        response.append(row)
+    return response
 
 @app.delete("/reports/{report_id}")
 def delete_report(report_id: str, authorization: str = Header(...), db: Session = Depends(get_db)):
-    verify_token(authorization)
-    report = db.query(MedicalReport).filter(MedicalReport.id == uuid.UUID(report_id)).first()
-    if not report: raise HTTPException(status_code=404, detail="Report not found")
+    requester, requester_roles = _get_requester_with_roles(authorization, db)
+    rep_id = _parse_uuid_or_400(report_id, "report_id")
+    report = db.query(MedicalReport).filter(MedicalReport.id == rep_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    # Uploader, patient owner, or admin can delete directly.
+    can_delete_directly = (
+        requester.id == report.uploaded_by
+        or requester.id == report.patient_id
+        or bool(requester_roles.intersection(ADMIN_ROLE_NAMES))
+    )
+    if not can_delete_directly:
+        _authorize_report_access(
+            requester=requester,
+            requester_roles=requester_roles,
+            patient_id=report.patient_id,
+            db=db,
+            require_report_permission=True,
+        )
+
     db.delete(report); db.commit()
     return {"message": "Report deleted"}
 
@@ -782,57 +990,45 @@ def delete_health_log(log_id: str, db: Session = Depends(get_db)):
 
 class RegisterPatientRequest(BaseModel):
     name: str
-    email: str
-    password: str
     age: int = 25
 
 @app.post("/register-patient")
 def register_patient_for_doctor(
-    name: str,
-    email: str = None,
-    age: int = 25,
+    req: RegisterPatientRequest,
     authorization: str = Header(...),
     db: Session = Depends(get_db)
 ):
-    # If email provided, standard flow. If not, SHADOW flow.
+    # Doctors can only create shadow records (no login/password).
     payload = verify_token(authorization)
     doctor = db.query(User).filter(User.id == uuid.UUID(payload["sub"]), User.role == "doctor").first()
     if not doctor: raise HTTPException(status_code=403, detail="Only doctors can register patients")
 
-    if email:
-        existing_user = db.query(User).filter(User.email == email).first()
-        if existing_user:
-            # Link existing user
-            link = DoctorPatientLink(doctor_id=doctor.id, patient_id=existing_user.id)
-            db.add(link)
-            try:
-                db.commit()
-            except:
-                db.rollback()
-                raise HTTPException(status_code=400, detail="Patient already linked")
-            return {"message": "Existing patient linked successfully"}
-
-        # Create new full user (with temp password)
-        temp_password = "HerCareUser2026"
-        new_user = User(id=uuid.uuid4(), name=name, email=email, password_hash=hash_password(temp_password), age=age, role="patient")
-        db.add(new_user)
-        db.commit()
-    else:
-        # Create SHADOW user (no email, no password)
-        new_user = User(id=uuid.uuid4(), name=name, age=age, role="patient", email=None, password_hash=None)
-        db.add(new_user)
-        db.commit()
+    # Create SHADOW user (no email, no password).
+    new_user = User(
+        id=uuid.uuid4(),
+        name=req.name,
+        age=req.age,
+        role="patient",
+        email=None,
+        password_hash=None
+    )
+    db.add(new_user)
+    db.commit()
 
     # Create Link with Share Code
     share_code = str(uuid.uuid4())[:8].upper() # 8-char code
-    link = DoctorPatientLink(doctor_id=doctor.id, patient_id=new_user.id, share_code=share_code)
+    link = DoctorPatientLink(
+        doctor_id=doctor.id,
+        patient_id=new_user.id,
+        share_code=share_code,
+        permissions=DEFAULT_LINK_PERMISSIONS.copy(),
+    )
     db.add(link)
     db.commit()
 
     return {
         "message": "Patient registered successfully",
         "patient_id": str(new_user.id),
-        "temp_password": "HerCareUser2026" if email else None,
         "share_code": share_code
     }
 
@@ -1042,4 +1238,3 @@ app.include_router(admin_router)
 app.include_router(doctor_router, prefix="/api/v1/doctors", tags=["doctor"])
 app.include_router(tele_router, tags=["telemedicine"])
 app.include_router(analytics_router, tags=["analytics"])
-

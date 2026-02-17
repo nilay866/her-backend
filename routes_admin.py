@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from database import get_db
 from models import User, UserRole, Role, AuditLog, Organization
-from auth import get_current_user_with_roles, require_role, hash_password, get_client_ip
+from auth import get_current_user_with_roles, require_role_dep, hash_password, get_client_ip
 from audit import AuditService
 from pydantic import BaseModel
 from typing import Optional, List
@@ -49,7 +49,7 @@ class AuditLogResponse(BaseModel):
 # ────── Dashboard ──────
 @router.get("/dashboard")
 def get_dashboard(
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """Get admin dashboard overview"""
@@ -72,7 +72,7 @@ def get_dashboard(
 @router.post("/users")
 def create_user(
     body: UserCreate,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     request: Request = None,
     db: Session = Depends(get_db)
 ):
@@ -132,7 +132,7 @@ def list_users(
     skip: int = 0,
     limit: int = 50,
     role_filter: Optional[str] = None,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """List all users (Admin only)"""
@@ -162,7 +162,7 @@ def list_users(
 @router.get("/users/{user_id}")
 def get_user(
     user_id: str,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """Get user details (Admin only)"""
@@ -189,7 +189,7 @@ def get_user(
 def update_user(
     user_id: str,
     body: UserUpdate,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     request: Request = None,
     db: Session = Depends(get_db)
 ):
@@ -241,7 +241,7 @@ def update_user(
 @router.delete("/users/{user_id}")
 def delete_user(
     user_id: str,
-    current_user: User = Depends(require_role("super_admin")),
+    current_user: User = Depends(require_role_dep("super_admin")),
     request: Request = None,
     db: Session = Depends(get_db)
 ):
@@ -281,7 +281,7 @@ def delete_user(
 def assign_role(
     user_id: str,
     body: RoleAssignRequest,
-    current_user: User = Depends(require_role("super_admin")),
+    current_user: User = Depends(require_role_dep("super_admin")),
     request: Request = None,
     db: Session = Depends(get_db)
 ):
@@ -334,7 +334,7 @@ def assign_role(
 @router.get("/users/{user_id}/roles")
 def get_user_roles(
     user_id: str,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """Get all roles assigned to a user"""
@@ -362,7 +362,7 @@ def get_user_roles(
 def get_audit_logs(
     skip: int = 0,
     limit: int = 100,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """Get audit logs (Admin only)"""
@@ -391,7 +391,7 @@ def get_user_audit_logs(
     user_id: str,
     skip: int = 0,
     limit: int = 50,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """Get audit logs for a specific user"""
@@ -417,7 +417,7 @@ def get_user_audit_logs(
 # ────── Doctor Approval ──────
 @router.get("/doctors/pending-approval")
 def get_pending_doctors(
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """Get doctors pending approval"""
@@ -439,7 +439,7 @@ def get_pending_doctors(
 @router.post("/doctors/{doctor_id}/approve")
 def approve_doctor(
     doctor_id: str,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     request: Request = None,
     db: Session = Depends(get_db)
 ):
@@ -472,7 +472,7 @@ def approve_doctor(
 def list_organizations(
     skip: int = 0,
     limit: int = 50,
-    current_user: User = Depends(require_role("super_admin", "hospital_admin")),
+    current_user: User = Depends(require_role_dep("super_admin", "hospital_admin")),
     db: Session = Depends(get_db)
 ):
     """List organizations"""
@@ -496,7 +496,7 @@ def list_organizations(
 @router.post("/organizations/{org_id}/verify")
 def verify_organization(
     org_id: str,
-    current_user: User = Depends(require_role("super_admin")),
+    current_user: User = Depends(require_role_dep("super_admin")),
     request: Request = None,
     db: Session = Depends(get_db)
 ):
