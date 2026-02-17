@@ -12,6 +12,9 @@ If cost is greater than threshold, it:
 
 - `ops/cost_guard_lambda.py`
 - `ops/deploy_cost_guard.sh`
+- `ops/check_cost_guard_status.sh`
+- `ops/emergency_shutdown_all.sh`
+- `ops/restore_services.sh`
 
 ## Deploy
 
@@ -30,3 +33,28 @@ chmod +x ops/deploy_cost_guard.sh
 - Exact zero overage is not guaranteed because AWS billing metrics are delayed.
 - Stopped RDS can auto-start after ~7 days by AWS behavior. For strict zero bill, delete DB resources manually when needed.
 - S3 storage may still incur tiny charges if objects remain.
+
+## Operations
+
+Check live status:
+
+```bash
+./ops/check_cost_guard_status.sh
+```
+
+Force immediate shutdown of all paid services:
+
+```bash
+./ops/emergency_shutdown_all.sh
+```
+
+Bring services back online:
+
+```bash
+./ops/restore_services.sh
+```
+
+## Recommended Guardrail
+
+Even with auto-shutdown enabled, create an AWS Budget alert in Billing Console at
+an amount lower than your free credit balance so you get email warnings early.
